@@ -65,6 +65,8 @@ import net.sourceforge.plantuml.security.SFile;
 import net.sourceforge.plantuml.skin.Pragma;
 import net.sourceforge.plantuml.teavm.TeaVM;
 import net.sourceforge.plantuml.teavm.js.StringBounderTeaVM;
+import net.sourceforge.plantuml.text.RichText;
+import net.sourceforge.plantuml.text.StyledString;
 import net.sourceforge.plantuml.text.SvgCharSizeHack;
 import net.sourceforge.plantuml.tikz.LatexEngine;
 import net.sourceforge.plantuml.tikz.StringBounderTikz;
@@ -228,6 +230,46 @@ public enum FileFormat {
 				public XDimension2D calculateDimension(UFont font, String text) {
 					final XDimension2D dim = super.calculateDimension(font, text.replace(' ', '!'));
 					return new XDimension2D((float) dim.getWidth(), dim.getHeight());
+				}
+			};
+
+		// [plantuml-engine oracle seam #5] dev-only, #170 (option 3): PNG's
+		// bounder is StringBounderAwt (the fall-through below) even under
+		// PLANTUML_DETERMINISTIC_TEXT, and two SVG renders reach it: a creole
+		// <math>/<latex> rollback is sized by its PNG export
+		// (AtomMath.java:63-70 -> ScientificEquationSafe.java:116-129), and
+		// wire print advances its cursor by a PNG measure (WireDiagram.java:133).
+		// Both were host AWT font metrics. The width table replaces only the
+		// METRICS, as in seams #2 to #4: each piece is measured by the seam-#4
+		// SVG_DETERMINISTIC bounder above (U+0020 as U+0021, width rounded to
+		// float), while StringBounderAwt's RichText split stays (bold pieces
+		// measured with their mutated font, widths summed, height the max) and
+		// getFileFormat() stays PNG. matchesProperty and getDescent are the
+		// interface defaults, as for the SVG arm's table bounder. Stock
+		// (property unset) is untouched.
+		if (System.getProperty("PLANTUML_DETERMINISTIC_TEXT") != null && this == PNG)
+			return new StringBounder() {
+				private final StringBounder pieces = SVG_DETERMINISTIC.getDefaultStringBounder();
+
+				@Override
+				public XDimension2D calculateDimension(UFont font, String text) {
+					if (RichText.isRich(text)) {
+						double width = 0;
+						double height = 0;
+						for (StyledString s : StyledString.build(text)) {
+							final UFont newFont = s.getStyle().mutateFont(font);
+							final XDimension2D rect = pieces.calculateDimension(newFont, s.getText());
+							width += rect.getWidth();
+							height = Math.max(height, rect.getHeight());
+						}
+						return new XDimension2D(width, height);
+					}
+					return pieces.calculateDimension(font, text);
+				}
+
+				@Override
+				public FileFormat getFileFormat() {
+					return PNG;
 				}
 			};
 
